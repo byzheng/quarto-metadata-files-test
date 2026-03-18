@@ -5,6 +5,16 @@ if (!requireNamespace("quarto", quietly = TRUE)) {
 }
 
 results_dir <- Sys.getenv("RESULTS_DIR", unset = "")
+runner_os <- Sys.getenv("RUNNER_OS", unset = Sys.info()[["sysname"]])
+platform <- paste(
+    Sys.info()[c("sysname", "release", "machine")],
+    collapse = " | "
+)
+r_version <- as.character(getRversion())
+quarto_cli_version <- paste(
+    system2("quarto", "--version", stdout = TRUE, stderr = TRUE),
+    collapse = " "
+)
 
 if (nzchar(results_dir)) {
     dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
@@ -19,9 +29,9 @@ cleanup <- function() {
 on.exit(cleanup(), add = TRUE)
 
 scenarios <- list(
-    list(name = "metadata_file", config = "_quarto1.yml"),
-    list(name = "inline_metadata", config = "_quarto2.yml"),
-    list(name = "metadata_file_render_list", config = "_quarto3.yml")
+    list(name = "metadata_file + rscript", config = "_quarto1.yml"),
+    list(name = "inline_metadata + rscript", config = "_quarto2.yml"),
+    list(name = "metadata_file - rscript", config = "_quarto3.yml")
 )
 
 results <- vector("list", length(scenarios))
@@ -47,6 +57,10 @@ for (index in seq_along(scenarios)) {
     scenario_result <- data.frame(
         scenario = scenario$name,
         config = scenario$config,
+        runner_os = runner_os,
+        platform = platform,
+        r_version = r_version,
+        quarto_version = quarto_cli_version,
         user = unname(timing[["user.self"]]),
         system = unname(timing[["sys.self"]]),
         elapsed = unname(timing[["elapsed"]]),
