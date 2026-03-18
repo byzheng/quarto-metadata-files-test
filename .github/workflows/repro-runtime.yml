@@ -1,0 +1,134 @@
+name: Repro Runtime
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Install R dependencies
+        shell: Rscript {0}
+        run: |
+          install.packages("quarto", repos = "https://cloud.r-project.org")
+
+      - name: Run repro script
+        shell: bash
+        env:
+          RESULTS_DIR: ci-results/${{ runner.os }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULTS_DIR"
+          quarto --version | tee "$RESULTS_DIR/quarto-version.txt"
+          Rscript --version 2>&1 | tee "$RESULTS_DIR/r-version.txt"
+          Rscript test.R | tee "$RESULTS_DIR/test.log"
+
+      - name: Upload runtime artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-${{ runner.os }}
+          path: ci-results/${{ runner.os }}
+          if-no-files-found: error
+
+  summarize:
+    name: Summarize runtimes
+    runs-on: ubuntu-latest
+    needs: repro
+    if: always()
+
+    steps:
+      - name: Download runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: timing-*
+          path: ci-results
+          merge-multiple: false
+
+      - name: Build summary table
+        shell: python
+        run: |
+          import csv
+          import os
+          from pathlib import Path
+
+          base_dir = Path("ci-results")
+          csv_paths = sorted(base_dir.glob("timing-*/timings.csv"))
+
+          lines = [
+              "# Runtime results",
+              "",
+              "| OS | Scenario | Elapsed (s) | User (s) | System (s) |",
+              "| --- | --- | ---: | ---: | ---: |",
+          ]
+
+          combined_rows = []
+
+          if not csv_paths:
+              lines.append("| n/a | n/a | n/a | n/a | n/a |")
+              lines.append("")
+              lines.append("No timing artifacts were produced.")
+          else:
+              for csv_path in csv_paths:
+                  os_name = csv_path.parent.name.removeprefix("timing-")
+                  with csv_path.open(newline="", encoding="utf-8") as handle:
+                      reader = csv.DictReader(handle)
+                      for row in reader:
+                          combined_rows.append(
+                              {
+                                  "os": os_name,
+                                  "scenario": row["scenario"],
+                                  "elapsed": row["elapsed"],
+                                  "user": row["user"],
+                                  "system": row["system"],
+                              }
+                          )
+                          lines.append(
+                              f"| {os_name} | {row['scenario']} | {row['elapsed']} | {row['user']} | {row['system']} |"
+                          )
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          combined_csv = base_dir / "combined-timings.csv"
+          with combined_csv.open("w", newline="", encoding="utf-8") as handle:
+              writer = csv.DictWriter(
+                  handle,
+                  fieldnames=["os", "scenario", "elapsed", "user", "system"],
+              )
+              writer.writeheader()
+              writer.writerows(combined_rows)
+
+      - name: Upload combined summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-summary
+          path: ci-results/combined-timings.csv
+          if-no-files-found: error
