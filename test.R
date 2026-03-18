@@ -51,3 +51,5 @@ system.time({
         )
     )
 })
+
+file.remove("_quarto.yml")
