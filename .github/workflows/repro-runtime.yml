@@ -192,19 +192,19 @@ jobs:
           with combined_csv.open("w", newline="", encoding="utf-8") as handle:
               writer = csv.DictWriter(
                   handle,
-              fieldnames=["os", "scenario", "platform", "r_version", "quarto_version", "rscript_calls", "elapsed", "user", "system"],
+                fieldnames=["os", "scenario", "platform", "r_version", "quarto_version", "rscript_calls", "elapsed", "user", "system"],
               )
               writer.writeheader()
               writer.writerows(combined_rows)
 
           detail_csv = base_dir / "platform-details.csv"
           with detail_csv.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(
-              handle,
-              fieldnames=["os", "platform", "r_version", "quarto_version", "rscript_calls"],
-            )
-            writer.writeheader()
-            writer.writerows(detail_rows)
+              writer = csv.DictWriter(
+                handle,
+                fieldnames=["os", "platform", "r_version", "quarto_version", "rscript_calls"],
+              )
+              writer.writeheader()
+              writer.writerows(detail_rows)
 
       - name: Upload combined summary
         if: always()
@@ -212,6 +212,6 @@ jobs:
         with:
           name: timing-summary
           path: |
-          ci-results/combined-timings.csv
-          ci-results/platform-details.csv
+            ci-results/combined-timings.csv
+            ci-results/platform-details.csv
           if-no-files-found: error
