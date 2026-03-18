@@ -69,12 +69,37 @@ jobs:
           Rscript --version 2>&1 | Tee-Object -FilePath "$env:RESULTS_DIR/r-version.txt"
           Rscript test.R 2>&1 | Tee-Object -FilePath "$env:RESULTS_DIR/test.log"
 
+      - name: Package runtime artifacts
+        if: always()
+        shell: python
+        env:
+          RESULTS_DIR: ci-results/${{ runner.os }}
+          ARTIFACT_ARCHIVE: ci-results/timing-${{ runner.os }}.zip
+        run: |
+          import os
+          from pathlib import Path
+          import zipfile
+
+          results_dir = Path(os.environ["RESULTS_DIR"])
+          archive_path = Path(os.environ["ARTIFACT_ARCHIVE"])
+
+          if not results_dir.exists():
+              raise FileNotFoundError(f"Results directory not found: {results_dir}")
+
+          archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+          with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted(results_dir.rglob("*")):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(results_dir.parent))
+
       - name: Upload runtime artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: timing-${{ runner.os }}
-          path: ci-results/${{ runner.os }}
+          path: ci-results/timing-${{ runner.os }}.zip
+          compression-level: 0
           if-no-files-found: error
 
   summarize:
@@ -90,6 +115,22 @@ jobs:
           pattern: timing-*
           path: ci-results
           merge-multiple: false
+
+      - name: Unpack runtime artifacts
+        shell: python
+        run: |
+          from pathlib import Path
+          import zipfile
+
+          base_dir = Path("ci-results")
+
+          for artifact_dir in sorted(path for path in base_dir.glob("timing-*") if path.is_dir()):
+              zip_paths = sorted(artifact_dir.glob("*.zip"))
+              if not zip_paths:
+                  continue
+
+              with zipfile.ZipFile(zip_paths[0]) as archive:
+                  archive.extractall(artifact_dir)
 
       - name: Build summary table
         shell: python
@@ -110,80 +151,81 @@ jobs:
           ]
 
           detail_lines = [
-            "",
-            "# Environment details",
-            "",
-            "| OS | Platform | R | Quarto | Quarto Rscript calls |",
-            "| --- | --- | --- | --- | ---: |",
+              "",
+              "# Environment details",
+              "",
+              "| OS | Platform | R | Quarto | Quarto Rscript calls |",
+              "| --- | --- | --- | --- | ---: |",
           ]
 
           combined_rows = []
           detail_rows = []
 
           def read_text(path: Path) -> str:
-            if not path.exists():
-              return ""
-            return path.read_text(encoding="utf-8", errors="replace").strip()
+              if not path.exists():
+                  return ""
+              return path.read_text(encoding="utf-8", errors="replace").strip()
 
           def clean_cell(value: str) -> str:
-            sanitized = value.replace("\n", " ").replace("\r", " ").strip()
-            return sanitized.replace("|", "\\|") or "n/a"
+              sanitized = value.replace("\n", " ").replace("\r", " ").strip()
+              return sanitized.replace("|", "\\|") or "n/a"
 
           if not run_dirs:
-            runtime_lines.append("| n/a | n/a | n/a | n/a | n/a |")
-            detail_lines.append("| n/a | n/a | n/a | n/a | n/a |")
-            detail_lines.append("")
-            detail_lines.append("No timing artifacts were produced.")
+              runtime_lines.append("| n/a | n/a | n/a | n/a | n/a |")
+              detail_lines.append("| n/a | n/a | n/a | n/a | n/a |")
+              detail_lines.append("")
+              detail_lines.append("No timing artifacts were produced.")
           else:
-            for run_dir in run_dirs:
-              os_name = run_dir.name.removeprefix("timing-")
-              csv_path = run_dir / "timings.csv"
-              log_path = run_dir / "test.log"
-              quarto_version = read_text(run_dir / "quarto-version.txt")
-              r_version_output = read_text(run_dir / "r-version.txt")
-              rscript_calls = len(
-                re.findall(r"\\[execProcess\\].*Rscript(?:\\.exe)?.*share[/\\\\]rmd[/\\\\]rmd\\.R", read_text(log_path))
-              )
+              for run_dir in run_dirs:
+                  os_name = run_dir.name.removeprefix("timing-")
+                  extracted_dir = run_dir / os_name
+                  csv_path = extracted_dir / "timings.csv"
+                  log_path = extracted_dir / "test.log"
+                  quarto_version = read_text(extracted_dir / "quarto-version.txt")
+                  r_version_output = read_text(extracted_dir / "r-version.txt")
+                  rscript_calls = len(
+                      re.findall(r"\\[execProcess\\].*Rscript(?:\\.exe)?.*share[/\\\\]rmd[/\\\\]rmd\\.R", read_text(log_path))
+                  )
 
-              platform_value = "n/a"
-              r_value = clean_cell(r_version_output)
-              quarto_value = clean_cell(quarto_version)
+                  platform_value = "n/a"
+                  r_value = clean_cell(r_version_output)
+                  quarto_value = clean_cell(quarto_version)
 
                   with csv_path.open(newline="", encoding="utf-8") as handle:
                       reader = csv.DictReader(handle)
                       for row in reader:
-                  platform_value = clean_cell(row.get("platform", "n/a"))
-                  r_value = clean_cell(row.get("r_version", r_version_output))
-                  quarto_value = clean_cell(row.get("quarto_version", quarto_version))
+                          platform_value = clean_cell(row.get("platform", "n/a"))
+                          r_value = clean_cell(row.get("r_version", r_version_output))
+                          quarto_value = clean_cell(row.get("quarto_version", quarto_version))
                           combined_rows.append(
                               {
                                   "os": os_name,
                                   "scenario": row["scenario"],
-                      "platform": row.get("platform", ""),
-                      "r_version": row.get("r_version", ""),
-                      "quarto_version": row.get("quarto_version", ""),
-                      "rscript_calls": rscript_calls,
+                                  "platform": row.get("platform", ""),
+                                  "r_version": row.get("r_version", ""),
+                                  "quarto_version": row.get("quarto_version", ""),
+                                  "rscript_calls": rscript_calls,
                                   "elapsed": row["elapsed"],
                                   "user": row["user"],
                                   "system": row["system"],
                               }
                           )
-                  runtime_lines.append(
+                          runtime_lines.append(
                               f"| {os_name} | {row['scenario']} | {row['elapsed']} | {row['user']} | {row['system']} |"
                           )
 
-              detail_rows.append(
-                {
-                  "os": os_name,
-                  "platform": platform_value,
-                  "r_version": r_value,
-                  "quarto_version": quarto_value,
-                  "rscript_calls": rscript_calls,
-                }
-              )
-              detail_lines.append(
-                f"| {os_name} | {platform_value} | {r_value} | {quarto_value} | {rscript_calls} |"
-              )
+                  detail_rows.append(
+                      {
+                          "os": os_name,
+                          "platform": platform_value,
+                          "r_version": r_value,
+                          "quarto_version": quarto_value,
+                          "rscript_calls": rscript_calls,
+                      }
+                  )
+                  detail_lines.append(
+                      f"| {os_name} | {platform_value} | {r_value} | {quarto_value} | {rscript_calls} |"
+                  )
 
           summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
           summary_path.write_text("\n".join(runtime_lines + detail_lines) + "\n", encoding="utf-8")
@@ -192,7 +234,7 @@ jobs:
           with combined_csv.open("w", newline="", encoding="utf-8") as handle:
               writer = csv.DictWriter(
                   handle,
-                fieldnames=["os", "scenario", "platform", "r_version", "quarto_version", "rscript_calls", "elapsed", "user", "system"],
+                  fieldnames=["os", "scenario", "platform", "r_version", "quarto_version", "rscript_calls", "elapsed", "user", "system"],
               )
               writer.writeheader()
               writer.writerows(combined_rows)
@@ -200,8 +242,8 @@ jobs:
           detail_csv = base_dir / "platform-details.csv"
           with detail_csv.open("w", newline="", encoding="utf-8") as handle:
               writer = csv.DictWriter(
-                handle,
-                fieldnames=["os", "platform", "r_version", "quarto_version", "rscript_calls"],
+                  handle,
+                  fieldnames=["os", "platform", "r_version", "quarto_version", "rscript_calls"],
               )
               writer.writeheader()
               writer.writerows(detail_rows)
